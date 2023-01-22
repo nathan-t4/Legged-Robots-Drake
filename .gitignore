@@ -1,0 +1,6 @@
+# Python bytecode
+*.py[cod]
+__pycache__/
+
+# TODO file
+TODO.md
