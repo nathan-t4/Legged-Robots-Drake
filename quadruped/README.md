@@ -2,7 +2,7 @@
 
 Quadruped simulation with Drake. Work in progress.
 
-![](https://user-images.githubusercontent.com/19811248/214011910-701ec964-ab23-43bc-9d7f-1f1e6ebc8884.mp4)
+<img src=https://user-images.githubusercontent.com/19811248/214022195-8c3ff128-9016-434c-b6ab-b2096fd5b782.mp4 width=500/>
 
 Credits to the [LittleDog example](https://github.com/RussTedrake/underactuated/blob/master/examples/littledog.ipynb) in the underactuated textbook
 
