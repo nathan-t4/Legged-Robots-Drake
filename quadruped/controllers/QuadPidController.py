@@ -1,4 +1,6 @@
 import numpy as np
+import sys
+import os
 
 from pydrake.systems.framework import LeafSystem, BasicVector
 from pydrake.multibody.tree import JointIndex
@@ -29,8 +31,6 @@ class QuadPidController(LeafSystem):
         self.__num_actuated_dofs = self.__plant.num_actuated_dofs() 
         self.__num_multibody_states = self.__plant.num_multibody_states()
 
-        num_positions = self.__plant.num_positions()
-
         self._gains = gains
         self._kp = np.ones(self.__num_actuated_dofs) * self._gains[0]
         self._kd = np.ones(self.__num_actuated_dofs) * self._gains[1]
@@ -39,6 +39,7 @@ class QuadPidController(LeafSystem):
         
         # (L39:51) Source: https://github.com/RussTedrake/underactuated/blob/master/examples/littledog.ipynb 
         # TODO: move somewhere else?
+        num_positions = self.__plant.num_positions()
         j = 0
         for i in range(self.__plant.num_joints()):
             joint = self.__plant.get_joint(JointIndex(i))

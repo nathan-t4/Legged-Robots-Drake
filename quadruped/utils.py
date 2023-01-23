@@ -1,7 +1,8 @@
 import numpy as np
 from pydrake.all import (JointActuatorIndex, JointIndex, namedview, ExtractGradient, PiecewisePolynomial)
+from typing import List, Tuple
 '''
-    Source: https://github.com/RussTedrake/underactuated/blob/master/underactuated/utils.py
+    Source for MakeNamedView*: https://github.com/RussTedrake/underactuated/blob/master/underactuated/utils.py
  '''
 def MakeNamedViewPositions(mbp, view_name, add_suffix_if_single_position=False):
     names = [None] * mbp.num_positions()
@@ -63,10 +64,28 @@ def MakeNamedViewActuation(mbp, view_name):
 def autoDiffArrayEqual(a,b):
     return np.array_equal(a, b) and np.array_equal(ExtractGradient(a), ExtractGradient(b))
 
-def VerifyTrajectoryIsValidPolynomial(traj, **kwargs):
-    assert isinstance(traj, PiecewisePolynomial)
-    if 'shape' in kwargs:
-        # Verify shape of traj
-        assert((traj.rows(), traj.columns()) == kwargs['shape']) 
+def VerifyTrajectoryIsValidPolynomial(traj, **kwargs) -> PiecewisePolynomial:    
+    assert 'shape' in kwargs, 'Pass expected shape of traj as argument kwargs[\'shape\']'
+    assert isinstance(kwargs['shape'], Tuple[float]) and len(kwargs['shape']) == 2, \
+        'Argument kwargs[\'shape\'] should be a tuple of length 2'
+
+    poly_traj = traj
+
+    if isinstance(traj, List[float]) and 'total_time' in kwargs:
+        # Create new PiecewisePolynomial with traj that is scaled to total_time
+        breaks = np.arange(0, len(traj)) * (kwargs['total_time'] / len(traj))
+        samples = traj
+        poly_traj = PiecewisePolynomial().CubicWithContinuousSecondDerivatives(
+            breaks=breaks,
+            samples=samples,
+            periodic_end_condition=True,
+            zero_end_point_derivatives=False
+        )
+    elif traj is None:
+        poly_traj = PiecewisePolynomial(np.zeros(kwargs['shape']))
+    else:
+        raise RuntimeError('Invalid trajectory input')
     
-    return True
+    assert (poly_traj.rows(), poly_traj.columns()) == kwargs['shape']
+    
+    return poly_traj

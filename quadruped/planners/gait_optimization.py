@@ -1,5 +1,7 @@
 import numpy as np
 import os
+import sys
+
 from functools import partial
 from types import SimpleNamespace
 from argparse import ArgumentParser
@@ -17,15 +19,18 @@ from pydrake.solvers import SnoptSolver
 from pydrake.systems.analysis import Simulator
 from pydrake.visualization import AddDefaultVisualization
 from pydrake.trajectories import PiecewisePolynomial
+from pydrake.systems.primitives import Saturation
 from pydrake.all import eq
 
-# TODO: use absolute paths
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+sys.path.append(os.path.dirname(SCRIPT_DIR))
+
 from quad_utils import set_quad_pose
 from utils import MakeNamedViewPositions, MakeNamedViewVelocities, autoDiffArrayEqual
 from controllers.QuadPidController import QuadPidController
 
 '''
-    Adopted from: https://github.com/RussTedrake/underactuated/blob/master/examples/littledog.ipynb
+    Credits to: https://github.com/RussTedrake/underactuated/blob/master/examples/littledog.ipynb
 
     COM dynamics + full kinematics planner
 
@@ -35,6 +40,9 @@ from controllers.QuadPidController import QuadPidController
     - Use meldis instead of meshcat (or use externally hosted meshcat)
     - Modify naming convention in mini cheetah urdf file
     - try with better q0 (walking_trot is fine with current q0)
+
+    TODO (formatting):
+    - Create class for GaitOptimization? Then make instance of GaitOptimization and visualize/simulate in simulate.py
 '''
 meshcat = StartMeshcat()
 
@@ -126,11 +134,11 @@ def HalfStrideToFullStride(PositionView, a):
     
 def gait_optimization_prog(plant, plant_context, gait='walking_trot'):
     q0 = plant.GetPositions(plant_context)
-    body_frame = plant.GetFrameByName("body")
-    quad = plant.GetSubsystemByName('quad')
+    body_frame = plant.GetFrameByName('body')
+    quad = plant.GetModelInstanceByName('quad')
 
-    PositionView = MakeNamedViewPositions(plant, "Positions")
-    VelocityView = MakeNamedViewVelocities(plant, "Velocities")
+    PositionView = MakeNamedViewPositions(plant, 'Positions')
+    VelocityView = MakeNamedViewVelocities(plant, 'Velocities')
 
     mu = 1 # rubber on rubber
     total_mass = plant.CalcTotalMass(plant_context, [quad])
@@ -148,7 +156,7 @@ def gait_optimization_prog(plant, plant_context, gait='walking_trot'):
     prog = MathematicalProgram()
 
     # Time steps
-    h = prog.NewContinuousVariables(gait_params.N-1, "h")
+    h = prog.NewContinuousVariables(gait_params.N-1, 'h')
     prog.AddBoundingBoxConstraint(0.5*gait_params.T/gait_params.N, 2.0*gait_params.T/gait_params.N, h)
     prog.AddLinearConstraint(sum(h) >= 0.9*gait_params.T)
     prog.AddLinearConstraint(sum(h) <= 1.1*gait_params.T)
@@ -161,8 +169,8 @@ def gait_optimization_prog(plant, plant_context, gait='walking_trot'):
     # Joint positions and velocities
     nq = plant.num_positions()
     nv = plant.num_velocities()
-    q = prog.NewContinuousVariables(nq, gait_params.N, "q")
-    v = prog.NewContinuousVariables(nv, gait_params.N, "v")
+    q = prog.NewContinuousVariables(nq, gait_params.N, 'q')
+    v = prog.NewContinuousVariables(nv, gait_params.N, 'v')
     q_view = PositionView(q)
     v_view = VelocityView(v)
     q0_view = PositionView(q0)
@@ -237,7 +245,7 @@ def gait_optimization_prog(plant, plant_context, gait='walking_trot'):
 
     # Contact forces
     contact_force = [
-        prog.NewContinuousVariables(3, gait_params.N - 1, f"foot{foot}_contact_force")
+        prog.NewContinuousVariables(3, gait_params.N - 1, f'foot{foot}_contact_force')
         for foot in range(4)
     ]
     for n in range(gait_params.N-1):
@@ -257,9 +265,9 @@ def gait_optimization_prog(plant, plant_context, gait='walking_trot'):
                 contact_force[foot][2, n])
 
     # Center of mass variables and constraints
-    com = prog.NewContinuousVariables(3, gait_params.N, "com")
-    comdot = prog.NewContinuousVariables(3, gait_params.N, "comdot")
-    comddot = prog.NewContinuousVariables(3, gait_params.N-1, "comddot")
+    com = prog.NewContinuousVariables(3, gait_params.N, 'com')
+    comdot = prog.NewContinuousVariables(3, gait_params.N, 'comdot')
+    comddot = prog.NewContinuousVariables(3, gait_params.N-1, 'comddot')
     # Initial CoM x,y position == 0
     prog.AddBoundingBoxConstraint(0, 0, com[:2,0])
     # Initial CoM z vel == 0
@@ -287,8 +295,8 @@ def gait_optimization_prog(plant, plant_context, gait='walking_trot'):
                 + total_mass * gravity))
 
     # Angular momentum (about the center of mass)
-    H = prog.NewContinuousVariables(3, gait_params.N, "H")
-    Hdot = prog.NewContinuousVariables(3, gait_params.N-1, "Hdot")
+    H = prog.NewContinuousVariables(3, gait_params.N, 'H')
+    Hdot = prog.NewContinuousVariables(3, gait_params.N-1, 'Hdot')
     prog.SetInitialGuess(H, np.zeros((3, gait_params.N)))
     prog.SetInitialGuess(Hdot, np.zeros((3,gait_params.N-1)))
     # Hdot = sum_i cross(p_FootiW-com, contact_force_i)
@@ -576,8 +584,18 @@ def simulate_gait_optimization(sim_time_step, gait):
     # Start visualization
     AddDefaultVisualization(builder)
 
-    # Add PidController
-    AddPidControllerForQuad(builder=builder, plant=plant)
+    # TODO: Add ModelPredictiveController
+
+    # Add PidController with saturation
+    pid_controller = builder.AddSystem(QuadPidController(plant=plant))
+    torque_limiter = builder.AddSystem(Saturation(
+        min_value = plant.GetLowerEffortLimit(),
+        max_value = plant.GetUpperEffortLimit()
+    ))
+
+    builder.Connect(pid_controller.get_output_port(), torque_limiter.get_input_port())
+    builder.Connect(torque_limiter.get_output_port(), plant.get_actuation_input_port())
+    builder.Connect(plant.get_state_output_port(), pid_controller.get_input_port_estimated_state())
 
     diagram = builder.Build()
     simulator = Simulator(diagram)
@@ -608,7 +626,6 @@ def simulate_gait_optimization(sim_time_step, gait):
         periodic_end_condition=True,
         zero_end_point_derivatives=False)
     
-    # TODO: There is no MPC in python bindings yet
     
     '''
         context = diagram.CreateDefaultContext()

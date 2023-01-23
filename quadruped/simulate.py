@@ -1,5 +1,6 @@
 import numpy as np
 import os
+import sys
 
 from pydrake.common import FindResourceOrThrow
 from pydrake.systems.framework import DiagramBuilder
@@ -13,6 +14,9 @@ from pydrake.math import RigidTransform
 from pydrake.systems.controllers import PidController
 from pydrake.systems.primitives import Saturation
 
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+sys.path.append(os.path.dirname(SCRIPT_DIR))
+
 from argparse import ArgumentParser
 from quad_utils import set_quad_pose
 from controllers.QuadPidController import QuadPidController
@@ -22,7 +26,7 @@ def setup_env(sim_time_step=1e-3):
     builder = DiagramBuilder()
     plant, scene_graph = AddMultibodyPlantSceneGraph(builder, sim_time_step)
     parser = Parser(plant)
-    quadruped_model_file = os.path.relpath('./models/mini_cheetah/mini_cheetah_mesh.urdf')
+    quadruped_model_file = os.path.join(SCRIPT_DIR, './models/mini_cheetah/mini_cheetah_mesh.urdf')
     quad = parser.AddModelFromFile(quadruped_model_file, model_name='quad')
     
     # Add ground plane (Note: Meshcat does not display HalfSpace geometry (yet))
