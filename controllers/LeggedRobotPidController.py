@@ -5,31 +5,35 @@ import os
 from pydrake.systems.framework import LeafSystem, BasicVector
 from pydrake.multibody.tree import JointIndex
 
-from utils import MakeNamedViewActuation
+from utils import (MakeNamedViewActuation, GetStateProjectionMatrix, ModifyGains, SetActuationView)
 
 # Note: RuntimeError when extending PidController: 
 #       Python-extended C++ class does not inherit from pybind11::wrapper<>, and the instance will be sliced. 
 #       Either avoid this situation, or the type extends pybind11::wrapper<>.
 
-class QuadPidController(LeafSystem):
+class LeggedRobotPidController(LeafSystem):
     """
-        PID Controller for quadrupeds
+        PID Controller for legged robots
         - Input: estimated state (num_multibody_states,) AND desired state (num_multibody_states,)
         - Output: controllable torques (num_actuated_dofs,)
         
         Note: Saturation is not incorporated at the moment to explicitly make user connect saturation block
         
         TODO:
+        - Make LeggedRobotPidController
         - better default gains based on mass matrix?
         - Add integral term (as continuous state?) 
     """
-    def __init__(self, plant, gains=(10.0,1.0)):
-        LeafSystem.__init__(self)
+    def __init__(self, plant, robot_type='quad', gains=(10,1)):
+        super().__init__()
 
         self.__plant = plant
         self.__context = self.__plant.CreateDefaultContext()
         self.__num_actuated_dofs = self.__plant.num_actuated_dofs() 
         self.__num_multibody_states = self.__plant.num_multibody_states()
+        self.__robot_type = robot_type
+
+        assert len(gains) == 2
 
         self._gains = gains
         self._kp = np.ones(self.__num_actuated_dofs) * self._gains[0]
@@ -37,22 +41,10 @@ class QuadPidController(LeafSystem):
 
         self._S = np.zeros((2*self.__num_actuated_dofs,self.__num_multibody_states))
         
-        # (L39:51) Source: https://github.com/RussTedrake/underactuated/blob/master/examples/littledog.ipynb 
-        # TODO: move somewhere else?
-        num_positions = self.__plant.num_positions()
-        j = 0
-        for i in range(self.__plant.num_joints()):
-            joint = self.__plant.get_joint(JointIndex(i))
-            # skip floating body indices
-            if joint.num_positions() != 1:
-                continue
-            self._S[j, joint.position_start()] = 1
-            self._S[12+j, num_positions + joint.velocity_start()] = 1
-            # use lower gain for the knee joints
-            if 'knee' in joint.name():
-                # self._kd[j] = 0.1
-                pass
-            j = j+1
+        # TODO: test if self.kd was changed
+        self._S = GetStateProjectionMatrix(plant=self.__plant)
+        ModifyGains(plant=self.__plant,kp=self._kp, kd=self._kd, robot_type=self.__robot_type)
+        print(self._kd)
         
         # Make gains into matrices
         self._kp = np.diag(self._kp)
@@ -94,23 +86,11 @@ class QuadPidController(LeafSystem):
         # TODO: why do I need negative sign here? (check actuation direction in mini-cheetah urdf)
         u = -(self._kp@(q-qd) + self._kd@(v-vd))
         output.SetFromVector(u)
-
+        
         # ActuationView = MakeNamedViewActuation(self.__plant, 'u')
         # u_view = ActuationView(np.zeros(self.__num_actuated_dofs))
-        # u_view.torso_to_abduct_fl_j_actuator     = u[0]
-        # u_view.abduct_fl_to_thigh_fl_j_actuator  = u[1]
-        # u_view.thigh_fl_to_knee_fl_j_actuator    = u[2]
-        # u_view.torso_to_abduct_fr_j_actuator     = u[3]
-        # u_view.abduct_fr_to_thigh_fr_j_actuator  = u[4]
-        # u_view.thigh_fr_to_knee_fr_j_actuator    = u[5]
-        # u_view.torso_to_abduct_hl_j_actuator     = u[6]
-        # u_view.abduct_hl_to_thigh_hl_j_actuator  = u[7]
-        # u_view.thigh_hl_to_knee_hl_j_actuator    = u[8]
-        # u_view.torso_to_abduct_hr_j_actuator     = u[9]
-        # u_view.abduct_hr_to_thigh_hr_j_actuator  = u[10]
-        # u_view.thigh_hr_to_knee_hr_j_actuator    = u[11]
-
-        # output.SetFromVector(u_view[:])
+        # u_view = SetActuationView(u_view, u, self.__robot_type)
+        # output.SetFromVector(u[:])
     
     def get_input_port_estimated_state(self):
         '''Get estimated state input port'''

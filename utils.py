@@ -64,7 +64,11 @@ def MakeNamedViewActuation(mbp, view_name):
 def autoDiffArrayEqual(a,b):
     return np.array_equal(a, b) and np.array_equal(ExtractGradient(a), ExtractGradient(b))
 
-def VerifyTrajectoryIsValidPolynomial(traj, **kwargs) -> PiecewisePolynomial:    
+def VerifyTrajectoryIsValidPolynomial(traj, **kwargs) -> PiecewisePolynomial:
+    '''
+        Verify traj is a valid (in the sense of MPC) PiecewisePolynomial 
+        - Currently only used in ModelPredictiveController()
+    '''    
     assert 'shape' in kwargs, 'Pass expected shape of traj as argument kwargs[\'shape\']'
     assert isinstance(kwargs['shape'], Tuple[float]) and len(kwargs['shape']) == 2, \
         'Argument kwargs[\'shape\'] should be a tuple of length 2'
@@ -89,3 +93,67 @@ def VerifyTrajectoryIsValidPolynomial(traj, **kwargs) -> PiecewisePolynomial:
     assert (poly_traj.rows(), poly_traj.columns()) == kwargs['shape']
     
     return poly_traj
+
+def GetStateProjectionMatrix(plant):
+    '''
+        Returns state projection matrix for plant
+        Source: https://github.com/RussTedrake/underactuated/blob/master/examples/littledog.ipynb 
+    '''
+    S = np.zeros((2*plant.num_actuated_dofs(), plant.num_multibody_states()))
+    num_positions = plant.num_positions()
+    j = 0
+    for i in range(plant.num_joints()):
+        joint = plant.get_joint(JointIndex(i))
+        # skip floating body indices
+        if joint.num_positions() != 1:
+            continue
+        S[j, joint.position_start()] = 1
+        S[12+j, num_positions + joint.velocity_start()] = 1
+        j = j+1
+    return S
+
+def ModifyGains(plant, kp, kd, robot_type):
+    '''
+        Modifies gains (kp, kd) for robot_type
+        - Assumes kp, kd are mutable
+        Source: https://github.com/RussTedrake/underactuated/blob/master/examples/littledog.ipynb 
+    '''
+    if robot_type == 'quad':
+        j = 0
+        for i in range(plant.num_joints()):
+            joint = plant.get_joint(JointIndex(i))
+            # use lower gain for the knee joints
+            if 'knee' in joint.name():
+                kd[j] = 0.1
+            j = j+1
+    elif robot_type == 'biped':
+        pass
+    else:
+        raise NotImplementedError('robot_type not specified')
+
+def SetActuationView(u_view, u, robot_type):
+    '''
+        Set actuation view for robot_type
+        TODO:
+        - make actuator names and order consistent for all quadruped models
+        - try to do change u_view directly (so no need to return u_view)
+    '''
+    if robot_type == 'quad':
+        u_view.torso_to_abduct_fl_j_actuator     = u[0]
+        u_view.abduct_fl_to_thigh_fl_j_actuator  = u[1]
+        u_view.thigh_fl_to_knee_fl_j_actuator    = u[2]
+        u_view.torso_to_abduct_fr_j_actuator     = u[3]
+        u_view.abduct_fr_to_thigh_fr_j_actuator  = u[4]
+        u_view.thigh_fr_to_knee_fr_j_actuator    = u[5]
+        u_view.torso_to_abduct_hl_j_actuator     = u[6]
+        u_view.abduct_hl_to_thigh_hl_j_actuator  = u[7]
+        u_view.thigh_hl_to_knee_hl_j_actuator    = u[8]
+        u_view.torso_to_abduct_hr_j_actuator     = u[9]
+        u_view.abduct_hr_to_thigh_hr_j_actuator  = u[10]
+        u_view.thigh_hr_to_knee_hr_j_actuator    = u[11]
+    elif robot_type == 'biped':
+        pass
+    else:
+        raise NotImplementedError('robot_type not specified')
+    
+    return u_view

@@ -7,8 +7,8 @@ from pydrake.trajectories import PiecewisePolynomial
 from pydrake.symbolic import Variable
 from pydrake.common.containers import namedview
 
-from ..utils import VerifyTrajectoryIsValidPolynomial, MakeNamedViewPositions, MakeNamedViewVelocities, MakeNamedViewActuation
-from ..quad_utils import GetQuadStateProjectionMatrix
+from utils import VerifyTrajectoryIsValidPolynomial, MakeNamedViewPositions, MakeNamedViewVelocities, MakeNamedViewActuation
+from quadruped.quad_utils import GetQuadStateProjectionMatrix
 # Refer to: https://stackoverflow.com/questions/72146203/linear-model-predictive-control-optimization-running-slowly
 
 
@@ -40,7 +40,7 @@ class ModelPredictiveController(LeafSystem):
     #         traj_init_x=None, traj_init_u=None):
 
     def __init__(self, plant, system, Q, R, dt, time_period, time_horizon, traj_init_x=None, traj_init_u=None):
-        LeafSystem.__init__(self)
+        super().__init__()
         self.__plant = plant
         self.__context = self.__plant.CreateDefaultContext() # Only to get current state. Can maybe remove?
 

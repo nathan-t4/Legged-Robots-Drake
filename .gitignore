@@ -5,4 +5,16 @@ __pycache__/
 # TODO file
 TODO.md
 
-output.mp4
+# Misc media
+media/
+
+# Atlas model files
+biped/models/atlas/materials
+*.vtm
+*.wrl
+*.vtp
+*chull.obj
+link_*
+palm*
+*.sh
+*.mlx

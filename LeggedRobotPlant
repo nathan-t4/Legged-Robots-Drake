@@ -1,0 +1,28 @@
+from pydrake.systems.primitives import LeafSystem
+from pydrake.systems.framework import BasicVector
+
+class LeggedRobotPlant(LeafSystem):
+    '''
+        LeggedRobotPlant [TODO]
+
+        Returns a plant that can be added to 
+        DiagramBuilder via DiagramBuilder.AddSystem()
+
+        - plant ports: state_output_port, actuation_input_port
+
+    '''
+    def __init__(self, file):
+        super().__init__()
+        self._parameters = self.DeclareNumericParameters('''LeggedRobotParams''') # create parameters from parsed urdf file?
+        self._control_input = self.DeclareVectorInputPort(BasicVector('''num_actuated_dofs'''))
+        self._state_index = self.DeclareContinuousState()
+        self._state_output_port = self.DeclareStateOutputPort('state', self._state_index)
+
+    def get_parameters(self):
+        pass
+
+    def get_state(self) -> BasicVector:
+        return self._state_index
+
+    def get_state_output_port(self):
+        pass
