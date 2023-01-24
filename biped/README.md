@@ -1,4 +1,4 @@
-# Biped in Quadruped
+# Biped in Drake
 
 Biped simulation in Drake. Work in progress.
 
