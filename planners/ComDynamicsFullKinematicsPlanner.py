@@ -26,6 +26,7 @@ from controllers.LeggedRobotPidController import LeggedRobotPidController
     TODO:
     - Add additional constraints
     - Make motion dynamically-feasible
+    - Generalize for quadrupeds and bipeds
 
     TODO (formatting):
     - Move private variables in ComDynamicsFullKinematicsPlanner
@@ -51,6 +52,7 @@ class ComDynamicsFullKinematicsPlanner(LeafSystem):
         gravity = self.__plant.gravity_field().gravity_vector()
         # TODO: inconsistent nq definition?
         nq = 12 
+        # TODO: change to function GetFootFrames(plant=plant)
         foot_frame = [
             self.__plant.GetFrameByName('LF_FOOT'),
             self.__plant.GetFrameByName('RF_FOOT'),

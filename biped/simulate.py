@@ -48,7 +48,7 @@ def setup_env(sim_time_step=1e-3):
 
     return builder, plant
     
-def passive_sim(sim_time_step=1e-2):
+def passive_sim(sim_time_step=1e-2, sim_time=3.0, sim_rate=0.5):
     builder, plant = setup_env(sim_time_step)
     
     # Start visualization
@@ -67,21 +67,24 @@ def passive_sim(sim_time_step=1e-2):
     # s = Source(diagram.GetGraphvizString(), filename="test.gv", format="png")
     # s.view()
 
-    # set_atlas_pose(plant, plant_context) # TODO
+    # set_atlas_pose(plant, plant_context, mode='default')
+
+    # Set pelvis initial position to [x0,y0,z0] = [0,0,0.95] m
     atlas = plant.GetBodyByName(name='pelvis')
     plant.SetFreeBodyPose(plant_context, atlas, RigidTransform(p=[0,0,0.95]))
 
     # Simulator settings
-    simulator.set_target_realtime_rate(.5)
+    simulator.set_target_realtime_rate(sim_rate)
     simulator.Initialize()
-    simulator.AdvanceTo(3.) 
+    simulator.AdvanceTo(sim_time) 
 
-def active_sim(sim_time_step=1e-3, sim_time=10, sim_rate=1, sim_type='stand'):
+def active_sim(sim_time_step=1e-2, sim_time=10, sim_rate=1, sim_type='stand'):
     '''
         (TODO) simulation of atlas standing via joint-level PD control
     '''
     builder, plant = setup_env(sim_time_step)
-    pid_controller = builder.AddSystem(LeggedRobotPidController(plant=plant))
+
+    pid_controller = builder.AddSystem(LeggedRobotPidController(plant=plant, robot_type='biped'))
     torque_limiter = builder.AddSystem(Saturation(
         min_value=plant.GetEffortLowerLimits(),
         max_value=plant.GetEffortUpperLimits()
@@ -100,7 +103,7 @@ def active_sim(sim_time_step=1e-3, sim_time=10, sim_rate=1, sim_type='stand'):
     plant_context = plant.GetMyContextFromRoot(context)
 
     # TODO
-    # set_atlas_pose(plant, plant_context, sim_type)
+    set_atlas_pose(plant, plant_context, sim_type)
 
     # Set desired state for pid_controller
     x0 = plant.get_state_output_port().Eval(plant_context)
@@ -114,13 +117,13 @@ def active_sim(sim_time_step=1e-3, sim_time=10, sim_rate=1, sim_type='stand'):
 def main():
     parser = ArgumentParser()
     parser.add_argument('--type', dest='type', type=str, default='stand')
-    parser.add_argument('--dt', dest='dt', type=float, default=1e-3)
-    parser.add_argument('--sim_time',dest='sim_time', type=float, default=10)
-    parser.add_argument('--sim_rate',dest='sim_rate', type=float, default=1)
+    parser.add_argument('--dt', dest='dt', type=float, default=1e-2)
+    parser.add_argument('--sim_time',dest='sim_time', type=float, default=3)
+    parser.add_argument('--sim_rate',dest='sim_rate', type=float, default=.5)
     args = parser.parse_args()
 
     passive_sim(sim_time_step=args.dt)
-    # active_sim(sim_time_step=args.dt, sim_time=args.sim_time, sim_type=args.type)
+    # active_sim(sim_time_step=args.dt, sim_time=args.sim_time, sim_rate=args.sim_rate, sim_type=args.type)
 
 if __name__ == '__main__':
     main()

@@ -14,7 +14,7 @@ from utils import (MakeNamedViewActuation, GetStateProjectionMatrix, ModifyGains
 class LeggedRobotPidController(LeafSystem):
     """
         PID Controller for legged robots
-        - Input: estimated state (num_multibody_states,) AND desired state (num_multibody_states,)
+        - Input: estimated state (num_multibody_states,1) AND desired state (num_multibody_states,1)
         - Output: controllable torques (num_actuated_dofs,)
         
         Note: Saturation is not incorporated at the moment to explicitly make user connect saturation block
@@ -41,10 +41,9 @@ class LeggedRobotPidController(LeafSystem):
 
         self._S = np.zeros((2*self.__num_actuated_dofs,self.__num_multibody_states))
         
-        # TODO: test if self.kd was changed
-        self._S = GetStateProjectionMatrix(plant=self.__plant)
+        # TODO: implement these functions for biped
+        self._S = GetStateProjectionMatrix(plant=self.__plant,robot_type=self.__robot_type)
         ModifyGains(plant=self.__plant,kp=self._kp, kd=self._kd, robot_type=self.__robot_type)
-        print(self._kd)
         
         # Make gains into matrices
         self._kp = np.diag(self._kp)

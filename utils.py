@@ -94,22 +94,26 @@ def VerifyTrajectoryIsValidPolynomial(traj, **kwargs) -> PiecewisePolynomial:
     
     return poly_traj
 
-def GetStateProjectionMatrix(plant):
+def GetStateProjectionMatrix(plant, robot_type):
     '''
         Returns state projection matrix for plant
         Source: https://github.com/RussTedrake/underactuated/blob/master/examples/littledog.ipynb 
     '''
-    S = np.zeros((2*plant.num_actuated_dofs(), plant.num_multibody_states()))
-    num_positions = plant.num_positions()
-    j = 0
-    for i in range(plant.num_joints()):
-        joint = plant.get_joint(JointIndex(i))
-        # skip floating body indices
-        if joint.num_positions() != 1:
-            continue
-        S[j, joint.position_start()] = 1
-        S[12+j, num_positions + joint.velocity_start()] = 1
-        j = j+1
+    if robot_type == 'quad' or robot_type == 'biped':
+        S = np.zeros((2*plant.num_actuated_dofs(), plant.num_multibody_states()))
+        num_positions = plant.num_positions()
+        num_actuated_dofs = plant.num_actuated_dofs()
+        j = 0
+        for i in range(plant.num_joints()):
+            joint = plant.get_joint(JointIndex(i))
+            # skip floating body indices
+            if joint.num_positions() != 1:
+                continue
+            S[j, joint.position_start()] = 1
+            S[num_actuated_dofs+j, num_positions + joint.velocity_start()] = 1 # TODO: verify (was 12 for quadruped)
+            j = j+1        
+    else:
+        raise NotImplementedError('Unrecognized robot type')
     return S
 
 def ModifyGains(plant, kp, kd, robot_type):
@@ -127,9 +131,10 @@ def ModifyGains(plant, kp, kd, robot_type):
                 kd[j] = 0.1
             j = j+1
     elif robot_type == 'biped':
+        # TODO
         pass
     else:
-        raise NotImplementedError('robot_type not specified')
+        raise NotImplementedError('Unrecognized robot type')
 
 def SetActuationView(u_view, u, robot_type):
     '''
@@ -154,6 +159,10 @@ def SetActuationView(u_view, u, robot_type):
     elif robot_type == 'biped':
         pass
     else:
-        raise NotImplementedError('robot_type not specified')
+        raise NotImplementedError('Unrecognized robot type')
     
     return u_view
+
+def GetFootFrames(plant):
+    '''[TODO] Returns foot frames of plant in a list'''
+    pass

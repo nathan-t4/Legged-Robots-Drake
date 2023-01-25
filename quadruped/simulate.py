@@ -44,7 +44,7 @@ def setup_env(sim_time_step=1e-3):
 
     return builder, plant
     
-def passive_sim(sim_time_step=1e-3):
+def passive_sim(sim_time_step=1e-3, sim_time=10, sim_rate=1):
     builder, plant = setup_env(sim_time_step)
     
     # Start visualization
@@ -66,9 +66,9 @@ def passive_sim(sim_time_step=1e-3):
     set_quad_pose(plant, plant_context)
 
     # Simulator settings
-    simulator.set_target_realtime_rate(1.)
+    simulator.set_target_realtime_rate(sim_rate)
     simulator.Initialize()
-    simulator.AdvanceTo(3.) 
+    simulator.AdvanceTo(sim_time) 
 
 def active_sim(sim_time_step=1e-3, sim_time=10, sim_rate=1, sim_type='stand'):
     '''
@@ -111,6 +111,8 @@ def main():
     parser.add_argument('--sim_time',dest='sim_time', type=float, default=10)
     parser.add_argument('--sim_rate',dest='sim_rate', type=float, default=1)
     args = parser.parse_args()
+    
+    # passive_sim(sim_time_step=args.dt, sim_time=args.sim_time, sim_rate=args.sim_rate)
 
     active_sim(sim_time_step=args.dt, sim_time=args.sim_time, sim_type=args.type)
 

@@ -1,11 +1,12 @@
 import numpy as np
 
 from pydrake.systems.framework import LeafSystem, BasicVector
-from pydrake.systems.primitives import Linearize
-from pydrake.solvers import MathematicalProgram, Solve, LinearEqualityConstraint, QuadraticConstraint, BoundingBoxConstraint
+from pydrake.systems.primitives import FirstOrderTaylorApproximation
+from pydrake.solvers import MathematicalProgram, Solve, LinearEqualityConstraint, Binding, BoundingBoxConstraint, QuadraticCost
 from pydrake.trajectories import PiecewisePolynomial
 from pydrake.symbolic import Variable
 from pydrake.common.containers import namedview
+from pydrake.math import IsPositiveDefinite
 
 from utils import VerifyTrajectoryIsValidPolynomial, MakeNamedViewPositions, MakeNamedViewVelocities, MakeNamedViewActuation
 from quadruped.quad_utils import GetQuadStateProjectionMatrix
@@ -13,10 +14,14 @@ from quadruped.quad_utils import GetQuadStateProjectionMatrix
 
 
 class ModelPredictiveController(LeafSystem):
-    """(Linear) Model Predictive Controller for Quadrupeds
-    - Input: 
-    - Output: quadruped (actuated_dofs) state 'x' [n=24], torque commands 'u' [n=12]
+    """Discrete Whole Body (Linear) Model Predictive Controller for Quadrupeds
+    - Input: Reference (optimized) state traj (traj_init_x) & control traj (traj_init_u)
+    - Output: desired state [q,v] & actuator torques [u]
 
+    Alternatively, simplified model MPC 
+    - Input: Contact patches
+    - Output: CoM trajectory
+    
     TODO:
     - Finish implementing + testing
     - 
@@ -31,13 +36,6 @@ class ModelPredictiveController(LeafSystem):
         - In practice, a robot is a discrete system, so dt will be min sensor update frequency?
     - Set access modifiers for all read-only variables
     """
-    # TODO: remove type hinting?
-    # def __init__(
-    #         self, plant, system, 
-    #         Q: np.ndarray[np.float64[24,37]], 
-    #         R: np.ndarray[np.float64[24,37]], 
-    #         dt: float, time_period: float, time_horizon: float, 
-    #         traj_init_x=None, traj_init_u=None):
 
     def __init__(self, plant, system, Q, R, dt, time_period, time_horizon, traj_init_x=None, traj_init_u=None):
         super().__init__()
@@ -45,7 +43,7 @@ class ModelPredictiveController(LeafSystem):
         self.__context = self.__plant.CreateDefaultContext() # Only to get current state. Can maybe remove?
 
         # System parameters
-        # TODO: Does (sub)system need to be an argument
+        # TODO: Does (sub)system (e.g. quad, biped) need to be an argument
         self.__system = system
         self._nq = self.__system.num_actuated_dofs()
         self._S = GetQuadStateProjectionMatrix(system)
@@ -54,15 +52,33 @@ class ModelPredictiveController(LeafSystem):
         self.PositionView = MakeNamedViewPositions(self.__plant, 'Positions')
         self.VelocityView = MakeNamedViewVelocities(self.__plant, 'Velocities')
         self.ActuationView = MakeNamedViewActuation(self.__plant, 'Actuations')
-    
-        # MPC parameters
-        self._k = 0 # MPC iteration 
+
         self._Q = Q
         self._R = R
+
+        if isinstance(Q, np.ndarray(self.nq, dtype=np.float64)):
+            self._Q = np.diag(self._Q)
+            self._R = np.diag(self._R)
+        else:
+            assert isinstance(Q, np.ndarray((self._nq,self._nq), dtype=np.float64)), \
+                'Q should be have shape=(num_actuated_dofs,num_actuated_dofs) and dtype=float'
+            assert isinstance(R, np.ndarray((self._nq,self._nq), dtype=np.float64)), \
+                'R should be have shape=(num_actuated_dofs,num_actuated_dofs) and dtype=float'
+        
+        assert IsPositiveDefinite(self._Q), 'Q is not positive definite'
+        assert IsPositiveDefinite(self._R), 'R is not positive definite'
+
+        # MPC parameters
+        self._k = 0 # MPC iteration 
+        self._timesteps_btw_MPC = 0
         self._dt = dt
         self._time_period = time_period 
         self._time_horizon = time_horizon
-        self._timesteps_btw_MPC = 0
+
+        # Add assertions for dt, time_period, and time_horizon
+        assert isinstance(time_horizon, float) and time_horizon > 0
+        assert isinstance(time_period, float) and time_period >= time_horizon
+        assert isinstance(dt, float) and dt > 0 and dt < time_horizon
 
         self._N = self._time_horizon // self._dt # TODO: floor division should be ok?
         self._Nt = self._time_period // self._dt
@@ -89,6 +105,11 @@ class ModelPredictiveController(LeafSystem):
             model_vector=BasicVector(size=self._nq),
             name='control',
             calc=self.SetTorque
+        )
+        self._desired_state_output_port = self.DeclareVectorOutputPort(
+            model_vector=BasicVector(size=2*self._nq),
+            name='desired_state',
+            calc=self.SetDesiredState
         )
         
         # TODO: what to do at first timestep? First run one MPC and use optimal_u from there?
@@ -120,60 +141,86 @@ class ModelPredictiveController(LeafSystem):
         self._x_view = np.empty((self._N,), dtype=namedview)
         self._u_view = np.empty((self._N,), dtype=namedview)
 
+        # Initialize linearized dynamics matrices
+        A = np.empty((self.__plant.num_multibody_states(),self.__plant.num_multibody_states()), dtype=np.float64)
+        B = np.empty((self.__plant.num_multibody_states(),self._nq), dtype=np.float64)
+        # Exclude floating base coords [TODO: verify shape]
+        self.__floating_base_state_index_end = self.__plant.get_multibody_states() - (2 * self._nq) # should == 13 for quad
+        A = A[self.__floating_base_state_index_end:,self.__floating_base_state_index_end:]
+        B = B[self.__floating_base_state_index_end:,:]
+
+        # Initialize linearized dynamics and torque limit constraints
+        self.linearized_dynamics_constraints = np.empty(self._N-1, dtype=Binding[LinearEqualityConstraint])
+        self.torque_limit_constraints = np.empty(self._N-1, dtype=Binding[BoundingBoxConstraint])
+
+        # Initialize state error and input error quadratic costs
+        self.state_error_quadratic_cost = np.empty(self._N-1, dtype=Binding[QuadraticCost])
+        self.input_error_quadratic_cost = np.empty(self._N-1, dtype=Binding[QuadraticCost])
+
+        # TODO: Initialize other constraints?
+
         for n in range(self._N-1):
             self._u[:,n] = self.prog.NewContinuousVariables(self._nq, 'u' + str(n))
             self._x[:,n] = self.prog.NewContinuousVariables(2*self._nq, 'x' + str(n))
             self._u_view[n] = self.ActuationView(self._u[:,n])
             self._x_view[n] = self.PositionView(self._x[:,n])
+            # Add linearized dynamics constraints to MathematicalProgram
+            self.linearized_dynamics_constraints[n] = self.prog.AddLinearEqualityConstraint(
+                Aeq=A,
+                beq=self._x[:n+1] + A@self._traj_init_x_slice[:,n] - B@(self._u[:,n]-self._traj_init_u_slice[:,n]),
+                vars=self._x[:,n]
+            ) 
+            # Add torque limits constraints to MathematicalProgram
+            self.torque_limit_constraints[n] = self.prog.AddBoundingBoxConstraint(
+                self.__system.GetEffortLowerLimit(), 
+                self.__system.GetEffortUpperLimit(), 
+                self._u[:,n]
+            )
+            # Add state error cost to MathematicalProgram
+            self.prog.AddQuadraticErrorCost(
+                Q=2*self._Q,
+                x_desired=self._traj_init_x_slice[:,n],
+                vars=self._x[:,n]
+            )
+            # Add input error cost to MathematicalProgram
+            self.prog.AddQuadraticErrorCost(
+                Q=2*self._R,
+                x_desired=self._traj_init_u_slice[:,n],
+                vars=self._u[:,n]
+            )
         self._x[:,self._N] = self.prog.NewContinuousVariables(2*self._nq, 'x' + str(self._N))
         self._x_view[self._N] = self.PositionView(self._x[:,self._N])
 
         # Initialize position constraints
-        x0 = self._S @ self.__context.get_state()
-        x0_view = self.PositionView(x0)
-        self.initial_value_constraint = self.prog.AddBoundingBoxConstraint(x0, x0, self._x[:,0])
-        # Let x0 act as placeholder for xf for now.
-        self.final_value_constraint = self.prog.AddBoundingBoxConstraint(x0, x0, self._x[:,self._N])
-
-        # Initialize torque limits and linearized dynamics constraints
-        A = np.empty((self.__plant.num_multibody_states(),self.__plant.num_multibody_states()), dtype=np.float64)
-        B = np.empty((self.__plant.num_multibody_states(),self._nq), dtype=np.float64)
-
-        # Exclude floating base coords 
-        # TODO: Verify shape
-        self.__floating_base_state_index_end = self.__plant.get_multibody_states() - (2 * self._nq) # should == 13
-        A = A[self.__floating_base_state_index_end:,self.__floating_base_state_index_end:]
-        B = B[self.__floating_base_state_index_end:,:]
-
-        self.linearized_dynamics_constraints = np.empty((self._nq,self._N-1), dtype=LinearEqualityConstraint)
-        self.torque_limit_constraints = np.empty((self._nq,self._N-1), dtype=BoundingBoxConstraint)
-
-        for n in range(self._N-1):
-            self.linearized_dynamics_constraints[:,n] = self.prog.AddLinearEqualityConstraint(
-                Aeq=A,
-                Beq=self._x[:n+1] + A@self._x[:,n] - B@(self._u[:,n]-self._traj_init_u[:,0])) 
-            self.torque_limits_constraints[:,n] = self.prog.AddBoundingBoxConstraint(
-                self.__system.GetEffortLowerLimit(), 
-                self.__system.GetEffortUpperLimit(), 
-                self._u[:,n]) 
-
-        # Initialize quadratic cost (for all timesteps...)
-        # For each MPC iteration, reset quadratic costs (remove and add) 
-        self.state_error_quadratic_cost = np.empty(self._N, dtype=QuadraticConstraint)
-        self.input_error_quadratic_cost = np.empty(self._N-1, dtype=QuadraticConstraint)
-
-        # TODO: Initialize other constraints
-        #       e.g. Friction cone constraints, foot position constraints (e.g. no-slip)
+        x0 = self.__context.get_state()
+        x0_proj = self._S @ x0
+        x0_view = self.PositionView(x0_proj)
+        self.initial_value_constraint = self.prog.AddBoundingBoxConstraint(
+            lb=x0_proj, 
+            ub=x0_proj, 
+            vars=self._x[:,0]
+        )
+        self.final_value_constraint = self.prog.AddBoundingBoxConstraint(
+            lb=self._traj_init_x_slice[:,-1], 
+            ub=self._traj_init_x_slice[:,-1], 
+            vars=self._x[:,self._N]    
+        )        
     
     def SetTorque(self, context, output):
-        # TODO: check if u needs to be negative or multiplied by self._P_y. See QuadPidController.GetPdTorque
+        '''
+            TODO: 
+            - check if u needs to be negative or multiplied by self._P_y. See QuadPidController.GetPdTorque
+            - how to align time (self._timesteps_btw_MPC) btw SetTorque and SetDesiredState
+        '''
         self._previous_u = self._optimal_u[:,self._timesteps_btw_MPC]
         output.SetFromVector(self._previous_u)
-
         self._timesteps_btw_MPC += 1
 
+    def SetDesiredState(self, context, output):
+        self._previous_x = self._optimal_x[:,self._timesteps_btw_MPC]
+        output.SetFromVector(self._previous_x)
+
     def RunModelPredictiveController(self, context): 
-        # cpp implementation uses DirectTranscription, where linearized discrete dynamics are a constraint by construction
         '''
             MPC at one time step
             - Trajectory stabilization with receding horizon LQR and updated constraints using UpdateCoefficient
@@ -205,71 +252,68 @@ class ModelPredictiveController(LeafSystem):
         # Update initial value constraint
         x0 = self._S @ current_context.get_state() 
         u0 = self._optimal_u[:,0] # previous action
-        # x0_view = self.PositionView(x0)
-        self.initial_value_constraint.UpdateCoefficients(new_lb=x0, new_ub=x0)
+        x0_view = self.PositionView(x0)
+        self.initial_value_constraint.evaluator().UpdateCoefficients(new_lb=x0, new_ub=x0)
+
+        system_input_port_index = self.__system.get_state_output_port(model_instance=self.__system) 
+        system_output_port_index = self.__plant.get_actuation_input_port(model_instance=self.__system)
 
         # Update linearized dynamics constraints
         # A[k] @ (x[k]-x0[k]) + B[k] @ (u[k]-u0[k]) = x[k+1]
- 
         for n in range(self._N-1):
-            # TODO: time-varying (discrete) linearization of A, B
-            #       [!] Cannot use Linearize bc operating pt is not equilibrium pt
-            # TODO: Go look at FiniteHorizonLinearQuadraticRegulator to see how to use autodif to get A[k], B[k]
+            # Get linearized system about (x0, u0) from current_context (returns an AffineSystem)
+            linearized_system = FirstOrderTaylorApproximation(
+                system=self.__plant,
+                context=current_context,
+                input_port_index=system_input_port_index,
+                output_port_inex=system_output_port_index,
+            )
 
-            # system_input_port_index = self.__system.get_state_output_port(model_instance=self.__system) 
-            # system_output_port_index = self.__plant.get_actuation_input_port(model_instance=self.__system)
+            A, B = linearized_system.A(), linearized_system.B()
 
-            # linearized_system = Linearize(
-            #     system=self.__system,
-            #     context=current_context, 
-            #     input_port_index=system_input_port_index, 
-            #     output_port_index=system_output_port_index,
-            #     equilibrium_check_tolerance=1e-6)
-            # A, B = linearized_system.A(), linearized_system.B()
-                    
             # Skip floating body indices 
-            # A = A[self.__floating_base_state_index_end:, self.__floating_base_state_index_end:]
-            # B = B[self.__floating_base_state_index_end,:]
+            A = A[self.__floating_base_state_index_end:, self.__floating_base_state_index_end:]
+            B = B[self.__floating_base_state_index_end,:]
 
-            # self.linearized_dynamics_constraints[:,n].UpdateCoefficients(
-            #     Aeq=A, 
-            #     beq=self._x[:,n+1] + A@self._x[:,n] - B@(self._u[:,n]-u0))
-            pass
+            self.linearized_dynamics_constraints[n].evaluator().UpdateCoefficients(
+                Aeq=A, 
+                beq=self._x[:,n+1] + A@self._traj_init_x_slice[:,n] - B@(self._u[:,n]-self._traj_init_u_slice[:,n])
+            )
         
         # Update final value constraint
         xf = self._traj_init_x_slice[:,-1]
-        # xf_view = self.PositionView(xf)
-        self.final_value_constraint.UpdateCoefficients(new_lb=xf, new_ub=xf)
+        xf_view = self.PositionView(xf)
+        self.final_value_constraint.evaluator().UpdateCoefficients(new_lb=xf, new_ub=xf)
 
         # self.prog.AddLinearConstraint(dirtran.initial_state() == current_state - state_ref) # initial condition
 
         # Update quadratic cost in error coordinates
         # TODO: technically, we only need to remove quadratic_cost[:,0], 
         #       change vars for quadratic[:,1:-2], and add quadratic_cost[:,-1]
-        # TODO: Fix so self.traj_*[:,n] works with periodicity
-        #       we know len(self.traj_*) == self._N
         for n in range(self._N-1):
-            self.prog.RemoveCost(self.state_error_quadratic_cost[:,n])
-            self.prog.RemoveCost(self.input_error_quadratic_cost[:,n])
-            self.state_error_quadratic_cost[:,n] = self.prog.AddQuadraticErrorCost(
+            self.prog.RemoveCost(self.state_error_quadratic_cost[n])
+            self.prog.RemoveCost(self.input_error_quadratic_cost[n])
+            self.state_error_quadratic_cost[n] = self.prog.AddQuadraticErrorCost(
                 Q=2*self._Q,
                 b=np.zeros((self._nq,1)),
                 desired_x=self._traj_init_x[:,n],
                 vars=self._S@self._x[:,n]
             )
-            self.input_error_quadratic_cost[:,n] = self.prog.AddQuadraticErrorCost(
+            self.input_error_quadratic_cost[n] = self.prog.AddQuadraticErrorCost(
                 Q=2*self._R,
                 b=np.zeros((self._nq,1)),
                 desired_x=self._traj_init_u[:,n],
                 vars=self._P_y@self._u[:,n]
             )
-        self.prog.RemoveCost(self.state_error_quadratic_cost[:,self._N])
-        self.state_error_quadratic_cost[:,self._N] = self.prog.AddQuadraticErrorCost(
-            Q=2*self._Q,
-            b=np.zeros((self._nq,1)),
-            desired_x=self._traj_init_u[:,-1],
-            vars=self._P_y@self._u[:,n]
-        )
+
+        # TODO: verify size of self.state_error_quadratic_cost[self.N]
+        # self.prog.RemoveCost(self.state_error_quadratic_cost[self._N])
+        # self.state_error_quadratic_cost[self._N] = self.prog.AddQuadraticErrorCost(
+        #     Q=2*self._Q,
+        #     b=np.zeros((self._nq,1)),
+        #     desired_x=self._traj_init_u[:,-1],
+        #     vars=self._P_y@self._u[:,n]
+        # )
 
         result = Solve(self.prog)
 
