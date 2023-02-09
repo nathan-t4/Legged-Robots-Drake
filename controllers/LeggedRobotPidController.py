@@ -23,8 +23,9 @@ class LeggedRobotPidController(LeafSystem):
         - Make LeggedRobotPidController
         - better default gains based on mass matrix?
         - Add integral term (as continuous state?) 
+        - decide to have feedforward torque input port or use Adder block
     """
-    def __init__(self, plant, robot_type='quad', gains=(10,1)):
+    def __init__(self, plant, robot_type='quad', gains=(10,0,1)):
         super().__init__()
 
         self.__plant = plant
@@ -33,11 +34,12 @@ class LeggedRobotPidController(LeafSystem):
         self.__num_multibody_states = self.__plant.num_multibody_states()
         self.__robot_type = robot_type
 
-        assert len(gains) == 2
+        assert len(gains) == 3
 
         self._gains = gains
         self._kp = np.ones(self.__num_actuated_dofs) * self._gains[0]
-        self._kd = np.ones(self.__num_actuated_dofs) * self._gains[1]
+        self._ki = np.ones(self.__num_actuated_dofs) * self._gains[1]
+        self._kd = np.ones(self.__num_actuated_dofs) * self._gains[2]
 
         self._S = np.zeros((2*self.__num_actuated_dofs,self.__num_multibody_states))
         
@@ -47,6 +49,7 @@ class LeggedRobotPidController(LeafSystem):
         
         # Make gains into matrices
         self._kp = np.diag(self._kp)
+        self._ki = np.diag(self._ki)
         self._kd = np.diag(self._kd)
 
         # self._P_y = self.__plant.MakeActuationMatrix()[6:,:].T
@@ -60,6 +63,10 @@ class LeggedRobotPidController(LeafSystem):
             model_vector=BasicVector(size=self.__num_multibody_states),
             name='desired_state'
         )
+        self._feedforward_input_port = self.DeclareVectorInputPort(
+            model_vector=BasicVector(size=self.__num_actuated_dofs),
+            name='feedforward'
+        )
         self._control_output_port = self.DeclareVectorOutputPort(
             model_value=BasicVector(size=self.__num_actuated_dofs),
             name='control',
@@ -69,10 +76,11 @@ class LeggedRobotPidController(LeafSystem):
     def GetVectorInput(self, context):
         estimated_state = self.EvalVectorInput(context, self._estimated_state_input_port.get_index()).get_value()
         desired_state = self.EvalVectorInput(context, self._desired_state_input_port.get_index()).get_value()
-        return estimated_state, desired_state
+        feedforward_torque = self.EvalVectorInput(context, self._feedforward_input_port.get_index()).get_value()
+        return estimated_state, desired_state, feedforward_torque
 
     def GetPdTorque(self, context, output):
-        x, xd = self.GetVectorInput(context)
+        x, xd, uff = self.GetVectorInput(context)
         
         x = self._S @ x
         q = x[:self.__num_actuated_dofs]
@@ -82,8 +90,13 @@ class LeggedRobotPidController(LeafSystem):
         qd = xd[:self.__num_actuated_dofs]
         vd = xd[-self.__num_actuated_dofs:]
 
-        # TODO: why do I need negative sign here? (check actuation direction in mini-cheetah urdf)
-        u = -(self._kp@(q-qd) + self._kd@(v-vd))
+        '''
+            TODO: 
+            - why do I need negative sign here? (check actuation direction in mini-cheetah urdf)
+            - Verify feedforward torque
+            - Add integral term
+        '''
+        u = -(self._kp@(q-qd) + self._kd@(v-vd)) + (0 if uff is None else uff)
         output.SetFromVector(u)
         
         # ActuationView = MakeNamedViewActuation(self.__plant, 'u')
@@ -91,15 +104,19 @@ class LeggedRobotPidController(LeafSystem):
         # u_view = SetActuationView(u_view, u, self.__robot_type)
         # output.SetFromVector(u[:])
     
-    def get_input_port_estimated_state(self):
+    def get_estimated_state_input_port(self):
         '''Get estimated state input port'''
         return self._estimated_state_input_port
 
-    def get_input_port_desired_state(self):
+    def get_desired_state_input_port(self):
         '''Get desired state input port'''
         return self._desired_state_input_port
+    
+    def get_feedforward_input_port(self):
+        '''Get feedforward torque input port'''
+        return self._feedforward_input_port
 
-    def get_output_port_control(self):
+    def get_control_output_port(self):
         '''Get control output port'''
         return self._control_output_port
 

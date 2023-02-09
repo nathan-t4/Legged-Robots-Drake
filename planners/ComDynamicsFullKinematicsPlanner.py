@@ -5,7 +5,7 @@ import sys
 from functools import partial
 from types import SimpleNamespace
 
-from pydrake.systems.framework import LeafSystem
+from pydrake.systems.framework import LeafSystem, BasicVector
 from pydrake.solvers import MathematicalProgram, Solve
 from pydrake.math import RotationMatrix
 from pydrake.autodiffutils import ExtractGradient, InitializeAutoDiff, AutoDiffXd, ExtractValue
@@ -14,10 +14,8 @@ from pydrake.multibody.tree import JacobianWrtVariable
 from pydrake.solvers import SnoptSolver
 from pydrake.all import eq
 
-
 from quadruped.quad_utils import setup_gait
 from utils import MakeNamedViewPositions, MakeNamedViewVelocities, autoDiffArrayEqual
-from controllers.LeggedRobotPidController import LeggedRobotPidController
 
 '''
     COM dynamics + full kinematics planner
@@ -29,7 +27,7 @@ from controllers.LeggedRobotPidController import LeggedRobotPidController
     - Generalize for quadrupeds and bipeds
 
     TODO (formatting):
-    - Move private variables in ComDynamicsFullKinematicsPlanner
+    - Make into an actual LeafSystem.
 '''
 
 class ComDynamicsFullKinematicsPlanner(LeafSystem):
@@ -38,6 +36,15 @@ class ComDynamicsFullKinematicsPlanner(LeafSystem):
         self.__plant = plant
         self.__plant_context = plant_context
         self._gait = gait
+        
+        self.__plant.DeclareVectorOutputPort(
+            name='state_traj',
+            model_value=BasicVector(2*self.__plant.num_actuated_dofs()),
+            calc=self.SetStateTraj
+        )
+    
+    def SetStateTraj(self, context, output):
+        pass
 
     def RunPlanner(self):
         q0 = self.__plant.GetPositions(self.__plant_context)
@@ -284,13 +291,11 @@ class ComDynamicsFullKinematicsPlanner(LeafSystem):
         # TODO: Add collision constraints
         if gait_params.check_self_collision:
             '''
-                TODO
+                [TODO]
                 - Not sure how to implement. Does drake support collision avoidance?
-                - Only consider certain geoms (ex. calfs and not quads)
 
             Check here: https://github.com/RobotLocomotion/drake/blob/master/bindings/pydrake/multibody/test/inverse_kinematics_test.py 
             '''
-            # # maybe only pass context on relevent bodies?
             # ik_context = [ad_plant.CreateDefaultContext() for i in range(N)] 
             # ik = InverseKinematics(self.__plant, ik_context, with_joint_limits=False)
 
@@ -421,7 +426,9 @@ class ComDynamicsFullKinematicsPlanner(LeafSystem):
         vars['result'] = result
         vars['h'] = h
         vars['q'] = q
+        vars['v'] = v
         vars['PositionView'] = PositionView
+        vars['VelocityView'] = VelocityView
         vars = SimpleNamespace(**vars)
 
         return result, vars, gait_params

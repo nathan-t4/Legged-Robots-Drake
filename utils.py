@@ -1,6 +1,6 @@
 import numpy as np
 from pydrake.all import (JointActuatorIndex, JointIndex, namedview, ExtractGradient, PiecewisePolynomial)
-from typing import List, Tuple
+from typing import Union
 '''
     Source for MakeNamedView*: https://github.com/RussTedrake/underactuated/blob/master/underactuated/utils.py
  '''
@@ -66,32 +66,36 @@ def autoDiffArrayEqual(a,b):
 
 def VerifyTrajectoryIsValidPolynomial(traj, **kwargs) -> PiecewisePolynomial:
     '''
-        Verify traj is a valid (in the sense of MPC) PiecewisePolynomial 
-        - Currently only used in ModelPredictiveController()
+        Verify traj is a valid PiecewisePolynomial (for custom MPC implementation)
     '''    
-    assert 'shape' in kwargs, 'Pass expected shape of traj as argument kwargs[\'shape\']'
-    assert isinstance(kwargs['shape'], Tuple[float]) and len(kwargs['shape']) == 2, \
-        'Argument kwargs[\'shape\'] should be a tuple of length 2'
+    assert 'shape' in kwargs and np.shape(kwargs['shape']) == (2,), \
+        'Input kwargs[\'shape\'] is not present or invalid. kwargs[\'shape\'] should be a tuple of length 2'
+    assert len(kwargs['shape']) == 2
 
     poly_traj = traj
 
-    if isinstance(traj, List[float]) and 'total_time' in kwargs:
-        # Create new PiecewisePolynomial with traj that is scaled to total_time
-        breaks = np.arange(0, len(traj)) * (kwargs['total_time'] / len(traj))
-        samples = traj
-        poly_traj = PiecewisePolynomial().CubicWithContinuousSecondDerivatives(
+    if 'total_time' in kwargs:
+        assert np.shape(traj)[0] == kwargs['shape'][0] # check rows of traj
+        assert isinstance(kwargs['total_time'], float)
+        # Scale traj to total_time + fit with cubic polynomial
+        breaks = np.arange(0, np.shape(traj)[1]) * (kwargs['total_time'] / len(traj))
+        samples = traj.T
+        poly_traj = PiecewisePolynomial.CubicWithContinuousSecondDerivatives(
             breaks=breaks,
             samples=samples,
-            periodic_end_condition=True,
-            zero_end_point_derivatives=False
+            periodic_end=False,
         )
     elif traj is None:
-        poly_traj = PiecewisePolynomial(np.zeros(kwargs['shape']))
+        # discretize with 10 steps
+        poly_traj = PiecewisePolynomial.FirstOrderHold(
+          breaks=np.arange(0,10)*(kwargs['total_time'] / 10),
+          samples=np.zeros(shape=(kwargs['shape'][0], 10)).T
+        )
     else:
         raise RuntimeError('Invalid trajectory input')
-    
-    assert (poly_traj.rows(), poly_traj.columns()) == kwargs['shape']
-    
+
+    assert poly_traj.rows() == kwargs['shape'][0]
+        
     return poly_traj
 
 def GetStateProjectionMatrix(plant, robot_type):
@@ -131,8 +135,7 @@ def ModifyGains(plant, kp, kd, robot_type):
                 kd[j] = 0.1
             j = j+1
     elif robot_type == 'biped':
-        # TODO
-        pass
+        raise NotImplementedError('TODO')
     else:
         raise NotImplementedError('Unrecognized robot type')
 
@@ -157,7 +160,7 @@ def SetActuationView(u_view, u, robot_type):
         u_view.abduct_hr_to_thigh_hr_j_actuator  = u[10]
         u_view.thigh_hr_to_knee_hr_j_actuator    = u[11]
     elif robot_type == 'biped':
-        pass
+        raise NotImplementedError('TODO')
     else:
         raise NotImplementedError('Unrecognized robot type')
     
@@ -166,3 +169,17 @@ def SetActuationView(u_view, u, robot_type):
 def GetFootFrames(plant):
     '''[TODO] Returns foot frames of plant in a list'''
     pass
+
+def quat2eul(x, seq='RPY'):
+    '''Convert quaternion to euler angles'''
+    assert len(x) == 4
+    (qw, qx, qy, qz) = x
+    euler_angles = np.empty(3, dtype=float) 
+    if seq == 'RPY':
+        euler_angles[0] = np.arctan2(2*(qw*qz+qx*qy), 1-2*(qy**2 + qz**2))
+        euler_angles[1] = -0.5*np.pi + 2*np.arctan2(np.sqrt(1+2*(qw*qy-qx*qz)), np.sqrt(1-2*(qw*qy-qx*qz)))
+        euler_angles[2] = np.arctan2(2*(qw*qz+qx*qy), 1-2*(qy**2+qz**2))
+    else:
+        raise NotImplementedError('TODO. Use seq=\'RPY\' for now')
+    
+    return euler_angles

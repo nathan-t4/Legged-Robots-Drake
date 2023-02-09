@@ -10,12 +10,14 @@ from pydrake.visualization import AddDefaultVisualization
 from pydrake.geometry import HalfSpace
 from pydrake.math import RigidTransform
 from pydrake.systems.primitives import Saturation
+from pydrake.trajectories import PiecewisePolynomial
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.append(os.path.dirname(SCRIPT_DIR))
 
 from argparse import ArgumentParser
-from quadruped.quad_utils import set_quad_pose
+from utils import MakeNamedViewState, MakeNamedViewActuation
+from quadruped.quad_utils import set_quad_pose, HalfStrideToTraj
 from controllers.LeggedRobotPidController import LeggedRobotPidController
 # from graphviz import Source
 
@@ -97,7 +99,7 @@ def active_sim(sim_time_step=1e-3, sim_time=10, sim_rate=1, sim_type='stand'):
 
     # Set desired state for pid_controller
     x0 = plant.get_state_output_port().Eval(plant_context)
-    pid_controller.get_input_port_desired_state().FixValue(pid_controller.GetMyContextFromRoot(context),x0)
+    pid_controller.get_desired_state_input_port().FixValue(pid_controller.GetMyContextFromRoot(context),x0)
 
     # Start simulation
     simulator.set_target_realtime_rate(sim_rate)
@@ -113,8 +115,7 @@ def main():
     args = parser.parse_args()
     
     # passive_sim(sim_time_step=args.dt, sim_time=args.sim_time, sim_rate=args.sim_rate)
-
     active_sim(sim_time_step=args.dt, sim_time=args.sim_time, sim_type=args.type)
-
+    
 if __name__ == '__main__':
     main()

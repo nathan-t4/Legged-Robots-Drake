@@ -18,3 +18,4 @@ link_*
 palm*
 *.sh
 *.mlx
+_*.py

@@ -18,7 +18,7 @@ sys.path.append(os.path.dirname(SCRIPT_DIR))
 
 from planners.ComDynamicsFullKinematicsPlanner import ComDynamicsFullKinematicsPlanner
 from controllers.LeggedRobotPidController import LeggedRobotPidController
-from quadruped.quad_utils import set_quad_pose, HalfStrideToFullStride
+from quadruped.quad_utils import set_quad_pose, pHalfStrideToFullStride # TODO: replace with HalfStrideToFullStride
 
 '''
     TODO:
@@ -73,7 +73,7 @@ def visualize_gait_optimization(sim_time_step, gait):
         qt = PositionView(q_sol.value(ts))
         if is_laterally_symmetric:
             if stride % 2 == 1:
-                qt = HalfStrideToFullStride(PositionView, qt)
+                qt = pHalfStrideToFullStride(PositionView, qt) # TODO: Remove function. use StateView instead
                 qt.body_x += stride_length/2.0
             stride = stride // 2
         qt.body_x += stride*stride_length
@@ -136,7 +136,7 @@ def simulate_gait_optimization(sim_time_step, gait):
     breaks = np.hstack((np.arange(t0, T, 1.0/32.0), T))
     samples = result.GetSolution(q)
     
-    q_sol_cubic = PiecewisePolynomial().CubicWithContinuousSecondDerivative(
+    q_sol_cubic = PiecewisePolynomial.CubicWithContinuousSecondDerivative(
         breaks=breaks, samples=samples, 
         periodic_end_condition=True,
         zero_end_point_derivatives=False)
